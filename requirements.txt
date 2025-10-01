@@ -20,3 +20,6 @@ lxml>=4.9.0
 html5lib>=1.1
 openpyxl>=3.0.0
 jupyter>=1.0.0
+
+# bilibili api
+bilibili-api-python 
