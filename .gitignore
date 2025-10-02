@@ -2,6 +2,7 @@
 *.log
 log.txt
 日志文件.txt
+.txt
 
 # 忽略数据目录
 data/
