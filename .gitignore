@@ -1,36 +1,34 @@
-# ============== Python 特定忽略规则 ==============
-# Byte-compiled / optimized / DLL files
+# 忽略日志文件
+*.log
+log.txt
+日志文件.txt
+
+# 忽略数据目录
+data/
+
+# 忽略PDF文件
+*.pdf
+
+# 忽略临时文件
+*.tmp
+*.temp
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略IDE配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略Python相关
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
-venv/
+*.so
+.Python
 env/
-ENV/
-
-# PyInstaller
-build/
-dist/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# ============== 操作系统文件 ==============
-# macOS
-.DS_Store
-
-# Windows
-Thumbs.db
-desktop.ini
-
-# ============== IDE 和编辑器 ==============
-# VSCode
-.vscode/
-
-# PyCharm
-.idea/
-
-# ============== 其他 ==============
-# 日志文件
-*.log
+venv/
+.venv/

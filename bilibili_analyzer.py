@@ -1,243 +1,361 @@
 #!/usr/bin/env python3
 """
-B站视频数据分析 -
-在终端中输入两个BV号，进行对比分析并生成对比柱状图
+B站视频数据分析 - 带性能监控的版本
 """
 
-import asyncio
-import matplotlib.pyplot as plt
 import numpy as np
-from bilibili_api import video
+import asyncio
+import json
+import os
+import time
+from datetime import datetime
+from bilibili_api import video, user
 
-class BilibiliCompareAnalyzer:
+################################################################################
+# ========== 1. 性能监控层 ==========
+################################################################################
+class PerformanceMonitor:
+    """专门负责性能数据收集和分析"""
+    
     def __init__(self):
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
-        plt.rcParams['axes.unicode_minus'] = False
+        self.performance_data = []
+        self.current_operation = None
+        self.operation_start_time = None
+        
+    def start_operation(self, operation_name, operation_type):
+        """开始监控一个操作"""
+        self.current_operation = operation_name
+        self.operation_start_time = time.time()
+        
+    def end_operation(self, success=True):
+        """结束当前操作的监控"""
+        if self.current_operation and self.operation_start_time:
+            duration = time.time() - self.operation_start_time
+            
+            self.performance_data.append({
+                "operation": self.current_operation,
+                "duration": round(duration, 3),  # 保留3位小数
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "success": success
+            })
+            
+            # 重置
+            self.current_operation = None
+            self.operation_start_time = None
+    
+    def get_performance_report(self):
+        """生成性能分析报告"""
+        if not self.performance_data:
+            return "暂无性能数据"
+        
+        # 按操作类型分类统计
+        network_ops = [op for op in self.performance_data if "get_" in op["operation"]]
+        file_ops = [op for op in self.performance_data if "save_" in op["operation"]]
+        data_ops = [op for op in self.performance_data if "calculate_" in op["operation"]]
+        display_ops = [op for op in self.performance_data if "display_" in op["operation"]]
+        
+        report = []
+        report.append("🔍 性能分析报告：")
+        report.append("══════════════════════════════════════")
+        
+        # 网络请求统计
+        if network_ops:
+            total_network = sum(op["duration"] for op in network_ops)
+            report.append(f"📡 网络请求 (总耗时: {total_network:.1f}秒)")
+            for op in network_ops:
+                report.append(f"  ├─ {op['operation']}: {op['duration']}秒")
+        
+        # 文件操作统计
+        if file_ops:
+            total_file = sum(op["duration"] for op in file_ops)
+            report.append(f"💾 文件操作 (总耗时: {total_file:.1f}秒)")
+            for op in file_ops:
+                report.append(f"  ├─ {op['operation']}: {op['duration']}秒")
+        
+        # 数据处理统计
+        if data_ops:
+            total_data = sum(op["duration"] for op in data_ops)
+            report.append(f"⚡ 数据处理 (总耗时: {total_data:.1f}秒)")
+            for op in data_ops:
+                report.append(f"  ├─ {op['operation']}: {op['duration']}秒")
+        
+        # 显示操作统计
+        if display_ops:
+            total_display = sum(op["duration"] for op in display_ops)
+            report.append(f"📊 显示输出 (总耗时: {total_display:.1f}秒)")
+            for op in display_ops:
+                report.append(f"  ├─ {op['operation']}: {op['duration']}秒")
+        
+        # 总结
+        total_time = sum(op["duration"] for op in self.performance_data)
+        if total_time > 0:
+            network_percent = (total_network / total_time * 100) if network_ops else 0
+            report.append(f"📈 总结: 总共{total_time:.1f}秒，网络请求占{network_percent:.1f}%")
+        
+        return "\n".join(report)
+    
+    def clear_data(self):
+        """清空性能数据"""
+        self.performance_data = []
+
+################################################################################
+# ========== 2. 基础设施层（网络、文件IO） ==========
+################################################################################
+class InfrastructureLayer:
+    """网络请求、文件操作等底层基础设施"""
+    
+    def __init__(self, performance_monitor):
+        self.monitor = performance_monitor
+    
+    async def network_request(self, operation_name, coroutine):
+        """带监控的网络请求"""
+        self.monitor.start_operation(operation_name, "network")
+        try:
+            result = await coroutine
+            self.monitor.end_operation(True)
+            return result
+        except Exception as e:
+            self.monitor.end_operation(False)
+            raise e
+    
+    def file_operation(self, operation_name, operation_func):
+        """带监控的文件操作"""
+        self.monitor.start_operation(operation_name, "file")
+        try:
+            result = operation_func()
+            self.monitor.end_operation(True)
+            return result
+        except Exception as e:
+            self.monitor.end_operation(False)
+            raise e
+
+################################################################################
+# ========== 3. 数据层（数据获取、格式化） ==========
+################################################################################
+class DataLayer:
+    """数据获取、清洗、格式化"""
+    
+    def __init__(self, infrastructure, performance_monitor):
+        self.infra = infrastructure
+        self.monitor = performance_monitor
     
     async def get_video_data(self, bvid):
-        """获取视频数据"""
-        try:
-            v = video.Video(bvid=bvid)
-            info = await v.get_info()
-            return info
-        except Exception as e:
-            print(f"❌ 获取视频 {bvid} 失败: {e}")
-            return None
-
-    def get_video_stats(self, info, bvid):
-        """提取视频统计数据"""
-        if not info:
-            return None
-            
-        stat = info['stat']
-        return {
-            'BV号': bvid,
-            '标题': info['title'][:25] + '...' if len(info['title']) > 25 else info['title'],
-            '完整标题': info['title'],
-            'UP主': info['owner']['name'],
-            '播放量': stat['view'],
-            '点赞数': stat['like'], 
-            '投币数': stat['coin'],
-            '收藏数': stat['favorite'],
-            '评论数': stat['reply'],
-            '分享数': stat['share'],
-            '弹幕数': stat['danmaku']
-        }
+        """获取单个视频数据"""
+        return await self.infra.network_request(f"获取视频详情_{bvid[:8]}", 
+                                              video.Video(bvid=bvid).get_info())
     
-    def print_comparison(self, data1, data2):
-        """打印对比结果"""
-        print(f"\n📊 视频对比分析结果:")
-        print("=" * 80)
-        
-        # 视频1信息
-        print(f"🎬 视频1 - {data1['BV号']}:")
-        print(f"   标题: {data1['完整标题']}")
-        print(f"   UP主: {data1['UP主']}")
-        print(f"   播放量: {data1['播放量']:,}")
-        print(f"   点赞数: {data1['点赞数']:,} | 投币数: {data1['投币数']:,} | 收藏数: {data1['收藏数']:,}")
-        print(f"   评论数: {data1['评论数']:,} | 分享数: {data1['分享数']:,} | 弹幕数: {data1['弹幕数']:,}")
-        
-        # 视频2信息
-        print(f"\n🎬 视频2 - {data2['BV号']}:")
-        print(f"   标题: {data2['完整标题']}")
-        print(f"   UP主: {data2['UP主']}")
-        print(f"   播放量: {data2['播放量']:,}")
-        print(f"   点赞数: {data2['点赞数']:,} | 投币数: {data2['投币数']:,} | 收藏数: {data2['收藏数']:,}")
-        print(f"   评论数: {data2['评论数']:,} | 分享数: {data2['分享数']:,} | 弹幕数: {data2['弹幕数']:,}")
-        
-        # 对比分析
-        print(f"\n📈 数据对比:")
-        self.print_difference("播放量", data1['播放量'], data2['播放量'])
-        self.print_difference("点赞数", data1['点赞数'], data2['点赞数'])
-        self.print_difference("投币数", data1['投币数'], data2['投币数'])
-        self.print_difference("收藏数", data1['收藏数'], data2['收藏数'])
-        self.print_difference("评论数", data1['评论数'], data2['评论数'])
-        
-        # 比率对比
-        print(f"\n📊 比率对比:")
-        self.print_ratio_comparison("点赞率", data1['点赞数'], data1['播放量'], data2['点赞数'], data2['播放量'])
-        self.print_ratio_comparison("投币率", data1['投币数'], data1['播放量'], data2['投币数'], data2['播放量'])
-        self.print_ratio_comparison("收藏率", data1['收藏数'], data1['播放量'], data2['收藏数'], data2['播放量'])
-        self.print_ratio_comparison("评论率", data1['评论数'], data1['播放量'], data2['评论数'], data2['播放量'])
+    async def get_user_info(self, uid):
+        """获取用户信息"""
+        return await self.infra.network_request(f"获取用户信息_{uid}", 
+                                              user.User(uid=uid).get_user_info())
+    
+    async def get_user_videos(self, uid):
+        """获取用户视频列表"""
+        return await self.infra.network_request(f"获取视频列表_{uid}", 
+                                              user.User(uid=uid).get_videos())
 
-    def print_difference(self, metric, value1, value2):
-        """打印数值差异"""
-        diff = value1 - value2
-        if diff > 0:
-            print(f"   {metric}: 视频1比视频2多 {abs(diff):,} ({diff/value2:+.1%})")
-        elif diff < 0:
-            print(f"   {metric}: 视频1比视频2少 {abs(diff):,} ({diff/value1:+.1%})")
-        else:
-            print(f"   {metric}: 两者相同")
-
-    def print_ratio_comparison(self, metric, num1, den1, num2, den2):
-        """打印比率对比"""
-        ratio1 = num1 / den1 if den1 > 0 else 0
-        ratio2 = num2 / den2 if den2 > 0 else 0
-        diff = ratio1 - ratio2
+################################################################################
+# ========== 4. 业务层（分析逻辑、算法） ==========
+################################################################################
+class BusinessLayer:
+    """核心业务逻辑和算法"""
+    
+    def __init__(self, performance_monitor):
+        self.monitor = performance_monitor
+    
+    def calculate_publish_std(self, timestamps):
+        """计算发布间隔标准差"""
+        self.monitor.start_operation("calculate_publish_std", "data_processing")
         
-        if diff > 0:
-            status = "更高"
-        elif diff < 0:
-            status = "更低"
-        else:
-            status = "相同"
+        if len(timestamps) < 2:
+            self.monitor.end_operation(True)
+            return 0
+        
+        intervals = np.diff(sorted(timestamps))
+        std_seconds = np.std(intervals)
+        
+        self.monitor.end_operation(True)
+        return std_seconds
+    
+    def calculate_triple_rates(self, videos_data):
+        """计算三连率稳定性"""
+        self.monitor.start_operation("calculate_triple_rates", "data_processing")
+        
+        triple_rates = []
+        for video in videos_data:
+            view = video['view']
+            if view > 0:
+                triple_rate = (video['like'] + video['coin'] + video['favorite']) / view
+                triple_rates.append(triple_rate)
+        
+        rate_std = np.std(triple_rates) if triple_rates else 0
+        
+        self.monitor.end_operation(True)
+        return rate_std
+
+################################################################################
+# ========== 5. 表现层（用户界面、显示） ==========
+################################################################################
+class PresentationLayer:
+    """用户界面和结果显示"""
+    
+    def __init__(self, performance_monitor):
+        self.monitor = performance_monitor
+    
+    def display_video_info(self, data):
+        """显示视频信息"""
+        self.monitor.start_operation("display_video_info", "display")
+        
+        try:
+            publish_time = datetime.fromtimestamp(data['发布时间戳'])
             
-        print(f"   {metric}: 视频1 {ratio1:.2%} vs 视频2 {ratio2:.2%} (视频1{status})")
+            print(f"\n📊 视频详细信息:")
+            print("=" * 60)
+            print(f"🎬 BV号: {data['BV号']}")
+            print(f"📺 标题: {data['标题']}")
+            print(f"👤 UP主: {data['UP主']}")
+            print(f"🕐 发布时间: {publish_time}")
+            # ... 其他显示逻辑
+            
+            self.monitor.end_operation(True)
+        except Exception as e:
+            self.monitor.end_operation(False)
+            raise e
+    
+    def display_performance_report(self):
+        """显示性能报告"""
+        self.monitor.start_operation("display_performance", "display")
+        print(f"\n{self.monitor.get_performance_report()}")
+        self.monitor.end_operation(True)
 
-    def generate_comparison_chart(self, data1, data2):
-        """生成对比柱状图"""
-        # 设置对比数据
-        metrics = ['点赞数', '投币数', '收藏数', '评论数', '分享数', '弹幕数']
-        values1 = [data1['点赞数'], data1['投币数'], data1['收藏数'], 
-                  data1['评论数'], data1['分享数'], data1['弹幕数']]
-        values2 = [data2['点赞数'], data2['投币数'], data2['收藏数'], 
-                  data2['评论数'], data2['分享数'], data2['弹幕数']]
+################################################################################
+# ========== 6. 控制层（流程协调、调度） ==========
+################################################################################
+class BilibiliVideoAnalyzer:
+    """主控制器 - 协调各层工作"""
+    
+    def __init__(self):
+        # 初始化各层
+        self.monitor = PerformanceMonitor()
+        self.infra = InfrastructureLayer(self.monitor)
+        self.data_layer = DataLayer(self.infra, self.monitor)
+        self.business_layer = BusinessLayer(self.monitor)
+        self.presentation = PresentationLayer(self.monitor)
         
-        # 创建分组柱状图
-        x = np.arange(len(metrics))
-        width = 0.35
+        self.data_dir = "data"
+    
+    async def export_up_data(self, uid):
+        """导出UP主数据到DS模型文件"""
+        print(f"🔄 正在获取UP主 {uid} 的所有视频数据...")
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
-        
-        # 第一个图：互动数据对比
-        bars1 = ax1.bar(x - width/2, values1, width, label=data1['标题'], alpha=0.7, color='#1f77b4')
-        bars2 = ax1.bar(x + width/2, values2, width, label=data2['标题'], alpha=0.7, color='#ff7f0e')
-        
-        ax1.set_title('B站视频数据对比分析', fontsize=16, fontweight='bold', pad=20)
-        ax1.set_ylabel('数量', fontsize=12)
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(metrics, rotation=45)
-        ax1.legend()
-        ax1.grid(axis='y', alpha=0.3)
-        
-        # 在柱子上显示数值
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                ax1.text(bar.get_x() + bar.get_width()/2., height + max(max(values1), max(values2))*0.01,
-                        f'{int(height):,}', ha='center', va='bottom', fontsize=9)
-        
-        # 第二个图：比率对比
-        ratios1 = [
-            data1['点赞数'] / data1['播放量'],
-            data1['投币数'] / data1['播放量'], 
-            data1['收藏数'] / data1['播放量'],
-            data1['评论数'] / data1['播放量']
-        ]
-        ratios2 = [
-            data2['点赞数'] / data2['播放量'],
-            data2['投币数'] / data2['播放量'],
-            data2['收藏数'] / data2['播放量'], 
-            data2['评论数'] / data2['播放量']
-        ]
-        ratio_metrics = ['点赞率', '投币率', '收藏率', '评论率']
-        
-        x_ratio = np.arange(len(ratio_metrics))
-        bars3 = ax2.bar(x_ratio - width/2, ratios1, width, label=data1['标题'], alpha=0.7, color='#1f77b4')
-        bars4 = ax2.bar(x_ratio + width/2, ratios2, width, label=data2['标题'], alpha=0.7, color='#ff7f0e')
-        
-        ax2.set_title('数据比率对比', fontsize=14, fontweight='bold', pad=20)
-        ax2.set_ylabel('比率', fontsize=12)
-        ax2.set_xticks(x_ratio)
-        ax2.set_xticklabels(ratio_metrics)
-        ax2.legend()
-        ax2.grid(axis='y', alpha=0.3)
-        
-        # 在比率柱子上显示百分比
-        for bars in [bars3, bars4]:
-            for bar in bars:
-                height = bar.get_height()
-                ax2.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                        f'{height:.2%}', ha='center', va='bottom', fontsize=9)
-        
-        # 添加总体信息
-        plt.figtext(0.5, 0.01, 
-                   f"视频1播放量: {data1['播放量']:,} | 视频2播放量: {data2['播放量']:,} | "
-                   f"视频1UP主: {data1['UP主']} | 视频2UP主: {data2['UP主']}", 
-                   ha='center', fontsize=10, style='italic')
-        
-        plt.tight_layout()
-        plt.subplots_adjust(bottom=0.1)
-        plt.show()
-
-    async def compare_videos(self, bv1, bv2):
-        """比较两个视频"""
-        print(f"🔄 正在获取视频数据...")
-        print(f"   视频1: {bv1}")
-        print(f"   视频2: {bv2}")
-        
-        # 异步获取两个视频数据
-        task1 = self.get_video_data(bv1)
-        task2 = self.get_video_data(bv2)
-        results = await asyncio.gather(task1, task2)
-        
-        data1 = self.get_video_stats(results[0], bv1)
-        data2 = self.get_video_stats(results[1], bv2)
-        
-        if not data1 or not data2:
-            print("❌ 至少有一个视频数据获取失败，请检查BV号是否正确")
+        try:
+            # 1. 获取用户信息
+            user_info = await self.data_layer.get_user_info(uid)
+            up_name = user_info['name']
+            
+            # 2. 获取视频列表
+            videos_response = await self.data_layer.get_user_videos(uid)
+            video_list = videos_response['list']['vlist'] if videos_response else []
+            
+            # 3. 批量获取视频详情
+            all_videos_data = []
+            for video_item in video_list:
+                bvid = video_item['bvid']
+                video_detail = await self.data_layer.get_video_data(bvid)
+                if video_detail:
+                    video_data = {
+                        "bvid": bvid,
+                        "pub_timestamp": video_detail['pubdate'],
+                        "view": video_detail['stat']['view'],
+                        "like": video_detail['stat']['like'],
+                        "coin": video_detail['stat']['coin'],
+                        "favorite": video_detail['stat']['favorite']
+                    }
+                    all_videos_data.append(video_data)
+            
+            # 4. 计算业务指标
+            timestamps = [v['pub_timestamp'] for v in all_videos_data]
+            publish_std = self.business_layer.calculate_publish_std(timestamps)
+            triple_rate_std = self.business_layer.calculate_triple_rates(all_videos_data)
+            
+            # 5. 保存数据
+            ds_data = {
+                "metadata": {
+                    "uid": str(uid),
+                    "up_name": up_name,
+                    "data_created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "video_count": len(all_videos_data),
+                    "publish_std_seconds": publish_std,
+                    "triple_rate_std": triple_rate_std
+                },
+                "videos": all_videos_data
+            }
+            
+            def save_operation():
+                os.makedirs(f"{self.data_dir}/ups", exist_ok=True)
+                filename = f"{self.data_dir}/ups/{uid}.json"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    json.dump(ds_data, f, ensure_ascii=False, indent=2)
+                return filename
+            
+            filename = self.infra.file_operation("保存数据文件", save_operation)
+            
+            print(f"✅ DS模型数据已保存至: {filename}")
+            print(f"📊 包含 {len(all_videos_data)} 个视频数据")
+            
+            # 6. 显示性能报告
+            self.presentation.display_performance_report()
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ 导出失败: {e}")
             return False
         
-        # 打印对比结果
-        self.print_comparison(data1, data2)
-        
-        # 生成对比图表
-        self.generate_comparison_chart(data1, data2)
-        
-        return True
-
+################################################################################
+# ========== 主程序分区 ==========
+################################################################################
 def main():
-    """主函数 - 支持两个BV号对比"""
-    analyzer = BilibiliCompareAnalyzer()
+    """主函数"""
+    analyzer = BilibiliVideoAnalyzer()
     
-    print("🎬 B站视频对比分析工具")
+    print("🎬 B站视频分析工具 - 性能监控版")
     print("=" * 50)
     
     while True:
         try:
-            print("\n📝 请输入两个BV号进行对比分析")
-            bv1 = input("请输入第一个BV号: ").strip()
+            print("\n📝 请选择模式:")
+            print("1. UP主数据导出 (输入UID)")
+            print("2. 查看性能报告")
+            print("3. 清空性能数据")
+            print("4. 退出")
             
-            if bv1.lower() == 'q':
+            choice = input("请选择模式 (1/2/3/4): ").strip()
+            
+            if choice == '4':
                 print("👋 感谢使用，再见！")
                 break
-            
-            bv2 = input("请输入第二个BV号: ").strip()
-            
-            if bv2.lower() == 'q':
-                print("👋 感谢使用，再见！")
-                break
-            
-            # 验证BV号格式
-            if not (bv1.startswith('BV') and bv2.startswith('BV')):
-                print("❌ 请输入正确的BV号，以 'BV' 开头")
+            elif choice == '1':
+                uid = input("请输入UP主UID: ").strip()
+                if not uid.isdigit():
+                    print("❌ UID应为数字")
+                    continue
+                
+                analyzer.monitor.clear_data()
+                success = asyncio.run(analyzer.export_up_data(uid))
+                
+            elif choice == '2':
+                analyzer.presentation.display_performance_report()
+                
+            elif choice == '3':
+                analyzer.monitor.clear_data()
+                print("✅ 性能数据已清空")
+                
+            else:
+                print("❌ 请输入 1, 2, 3 或 4")
                 continue
             
-            # 执行对比分析
-            asyncio.run(analyzer.compare_videos(bv1, bv2))
-            
-            print("\n" + "=" * 50)
+            print("=" * 50)
             
         except KeyboardInterrupt:
             print("\n\n👋 用户中断，感谢使用！")
