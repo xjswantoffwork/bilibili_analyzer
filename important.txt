@@ -1,0 +1,29 @@
+bilibili_toolkit/
+├── README.md           # 项目说明，非常重要！
+├── requirements.txt    # 项目依赖，方便他人一键安装
+├── .env.example  # 环境变量模板（如API密钥）
+|—— run.py      
+├── src/                # 主要源代码
+│   ├── __init__.py
+│   ├── main.py         # 程序主入口，负责调度
+│   ├── core/           # 核心业务逻辑
+│   │   ├── __init__.py
+│   │   ├── analyzer.py # 【分析器】主要逻辑
+│   │   ├── predictor.py# 【预测器】主要逻辑
+│   │   └── expert_rules.py # 专家系统规则定义
+│   ├── data/           # 数据层
+│   │   ├── __init__.py
+│   │   ├── models.py   # 【关键】所有数据结构定义
+│   │   ├── bilibili_client.py # 封装B站API调用
+│   │   └── cache.py    # 缓存处理，避免重复请求
+│   ├── utils/          # 工具函数
+│   │   ├── __init__.py
+│   │   ├── logger.py   # 日志配置
+│   │   └── formatters.py # JSON和自然语言格式化
+│   └── config/         # 配置管理
+│       ├── __init__.py
+│       └── settings.py # 所有可配置参数
+└── tests/              # 测试目录
+    ├── __init__.py
+    ├── test_analyzer.py
+    └── test_predictor.py
